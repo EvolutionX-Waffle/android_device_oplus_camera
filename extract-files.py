@@ -42,6 +42,10 @@ blob_fixups: blob_fixups_user_type = {
     'odm/lib64/oemui.so': blob_fixup()
         .fix_soname()
         .replace_needed('android.hardware.graphics.common-V4-ndk.so', 'android.hardware.graphics.common-V7-ndk.so'),
+    # Links libcameraservice, which uses camera.device V4.
+    'system_ext/lib64/libcsextimpl.so': blob_fixup()
+        .replace_needed('android.hardware.camera.provider-V3-ndk.so', 'android.hardware.camera.provider-V4-ndk.so')
+        .replace_needed('android.hardware.camera.device-V3-ndk.so', 'android.hardware.camera.device-V4-ndk.so'),
     # TypeFaceUtil NPE on non OxygenOS frameworks closes portrait mode.
     'system_ext/priv-app/OplusCamera/OplusCamera.apk': blob_fixup()
         .call(patch_typeface),
