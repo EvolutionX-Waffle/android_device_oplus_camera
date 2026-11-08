@@ -1,0 +1,109 @@
+diff --git a/core/java/android/media/ImageReader.java b/core/java/android/media/ImageReader.java
+index 794001989..aedc0fa8a 100644
+--- a/core/java/android/media/ImageReader.java
++++ b/core/java/android/media/ImageReader.java
+@@ -1464,6 +1464,33 @@ public class ImageReader implements AutoCloseable {
+     private synchronized native void nativeClose();
+     private synchronized native void nativeReleaseImage(Image i);
+     private synchronized native Surface nativeGetSurface();
++    // OPLUSCAM-BEGIN
++    // OnePlus camera (Live Photo) extension: hands back the
++    // IGraphicBufferConsumer* behind this ImageReader.  OxygenOS declares exactly
++    //     private synchronized native long nativeGetConsumer()
++    // here; the OOS dump's /system_ext/etc/hidden_api_exemptions whitelists
++    //     Landroid/media/ImageReader;->nativeGetConsumer()J
++    // for the camera app, next to detachImage() and mAcquiredImages (both of
++    // which AOSP already has - this method is the only one missing).
++    //
++    // com.oplus.camera's BufferQueueUtils looks it up by name with
++    // getDeclaredMethod("nativeGetConsumer") + setAccessible(true), casts the
++    // result to Long, and feeds it to
++    //     HardwareBufferUtils.generateAddress(J, HardwareBuffer)
++    // to attach a preview frame to this reader's BufferQueue.
++    //
++    // Without it every preview frame throws NoSuchMethodException,
++    // LivePhotoPresenter.attachImageBufferToBufferQueue() fails, and the
++    // HardwareBuffer taken for that frame is never closed - leaking one
++    // 1920x1440 NV12 gralloc buffer (4200 kB) plus its 72 kB metadata buffer
++    // per frame, ~96 MB/s.  Memory is gone in ~60 s, and lmkd then walks the
++    // whole adj range and kills the foreground camera (dumpsys activity
++    // exit-info reason=3 LOW_MEMORY).  Live Photo itself still worked via a
++    // fallback copy path - it wrote real MotionPhoto JPEGs - so the leak was
++    // the only visible symptom.  See docs/FINDINGS.md #5 in oplus-camera-waffle.
++    @android.compat.annotation.UnsupportedAppUsage
++    private synchronized native long nativeGetConsumer();
++    // OPLUSCAM-END
+     private synchronized native int nativeDetachImage(Image i, boolean throwISEOnly);
+     private synchronized native void nativeDiscardFreeBuffers();
+ 
+diff --git a/core/jni/android_media_ImageReader.cpp b/core/jni/android_media_ImageReader.cpp
+index b42aeaa19..35cab3313 100644
+--- a/core/jni/android_media_ImageReader.cpp
++++ b/core/jni/android_media_ImageReader.cpp
+@@ -1043,6 +1043,56 @@ static jobject Image_getOplusHardwareBuffer(JNIEnv* env, jobject thiz) {
+ }
+ #endif
+ 
++// OPLUSCAM-BEGIN
++// Backs ImageReader.nativeGetConsumer(), the OxygenOS hidden method that
++// com.oplus.camera's Live Photo path reflects for.  It must return the
++// IGraphicBufferConsumer* - the BufferQueueConsumer behind this reader - NOT
++// the BufferItemConsumer* (a ConsumerBase wrapper) and NOT the producer.
++//
++// Proof, from the blob rather than from guessing (docs/FINDINGS.md #5):
++//   * The value ends up as `this` in libNativeWinBuffExchange.so's
++//     attachHardwareBufferToBufferQ(), which makes two virtual calls on it:
++//         ldr x8,[x8,#0x40]; blr   (this, int* outSlot, const sp<GraphicBuffer>&)
++//         ldr x8,[x8,#0x48]; blr   (this, slot, 0, 0, 0, const sp<Fence>&)
++//     and its own error strings name them: "Cannot attachBuffer to
++//     aNativeBufferConsumer" / "Cannot releaseHelper/releaseBuffer to camera
++//     IGraphicBufferConsumer".
++//   * IGraphicBufferConsumer derives from RefBase non-virtually, so its
++//     address point is vtable+0x10 and slots 8/9 are attachBuffer and
++//     releaseBuffer(int, uint64_t, EGLDisplay, EGLSyncKHR, const sp<Fence>&)
++//     - in OxygenOS's libgui AND in ours (dumped from the relocations of
++//     both; the layouts are identical at every slot the blob touches).
++//   * BufferItemConsumer* (session 5/6) lands those slots on unrelated
++//     ConsumerBase virtuals: no crash, no error, buffer never re-attached ->
++//     one gralloc buffer leaked per preview frame (~33 dmabuf fd/s).
++//   * IGraphicBufferProducer* (session 7) has a virtual RefBase base
++//     (address point +0x18), so slot 8 is setAsyncMode and slot 9 is
++//     dequeueBuffer -> SIGSEGV writing through a garbage outBufferAge.
++//
++// The raw pointer is safe to hand out: the BufferQueueConsumer is owned by
++// the BufferItemConsumer, which this context holds for its whole lifetime,
++// and the app only ever passes it straight back into the blob.
++
++static jlong ImageReader_getConsumer(JNIEnv* env, jobject thiz) {
++    ALOGV("%s: ", __FUNCTION__);
++    JNIImageReaderContext* const ctx = ImageReader_getContext(env, thiz);
++    if (ctx == NULL) {
++        jniThrowRuntimeException(env, "ImageReaderContext is not initialized");
++        return 0;
++    }
++    BufferItemConsumer* const consumer = ctx->getBufferConsumer();
++    if (consumer == NULL) {
++        return 0;
++    }
++    // ConsumerBase marks this accessor deprecated ("temporary hack for
++    // refactoring"); it is exactly the object the OxygenOS blob expects.
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++    return reinterpret_cast<jlong>(consumer->getIGraphicBufferConsumer().get());
++#pragma clang diagnostic pop
++}
++
++// OPLUSCAM-END
+ } // extern "C"
+ 
+ // ----------------------------------------------------------------------------
+@@ -1054,6 +1104,9 @@ static const JNINativeMethod gImageReaderMethods[] =
+          {"nativeReleaseImage", "(Landroid/media/Image;)V", (void*)ImageReader_imageRelease},
+          {"nativeImageSetup", "(Landroid/media/Image;)I", (void*)ImageReader_imageSetup},
+          {"nativeGetSurface", "()Landroid/view/Surface;", (void*)ImageReader_getSurface},
++         // OPLUSCAM-BEGIN
++         {"nativeGetConsumer", "()J", (void*)ImageReader_getConsumer},
++         // OPLUSCAM-END
+          {"nativeDetachImage", "(Landroid/media/Image;Z)I", (void*)ImageReader_detachImage},
+ #ifdef __ANDROID__
+          {"nativeCreateImagePlanes",

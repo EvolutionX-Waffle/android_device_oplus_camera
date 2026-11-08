@@ -1,0 +1,43 @@
+diff --git a/services/camera/libcameraservice/Android.bp b/services/camera/libcameraservice/Android.bp
+index d32a354..9e9729d 100644
+--- a/services/camera/libcameraservice/Android.bp
++++ b/services/camera/libcameraservice/Android.bp
+@@ -276,6 +276,11 @@ cc_library {
+     }) + select(soong_config_variable("camera", "ext_lib"), {
+         any @ flag_val: ["-DTARGET_PROVIDES_CAMERA_PROVIDER_EXT_LIB"],
+         default: [],
++        // OPLUSCAM-BEGIN
++    }) + select(soong_config_variable("camera", "allow_nonincreasing_timestamps"), {
++        any @ value: ["-DALLOW_NONINCREASING_TIMESTAMPS"],
++        default: [],
++        // OPLUSCAM-END
+     }),
+ 
+     whole_static_libs: select(soong_config_variable("libcameraservice", "ext_lib"), {
+diff --git a/services/camera/libcameraservice/device3/Camera3Stream.cpp b/services/camera/libcameraservice/device3/Camera3Stream.cpp
+index 9e539de..2d457f2 100644
+--- a/services/camera/libcameraservice/device3/Camera3Stream.cpp
++++ b/services/camera/libcameraservice/device3/Camera3Stream.cpp
+@@ -795,12 +795,22 @@ status_t Camera3Stream::returnBuffer(const camera_stream_buffer &buffer,
+ 
+     // Buffer status may be changed, so make a copy of the stream_buffer struct.
+     camera_stream_buffer b = buffer;
++    // OPLUSCAM-BEGIN
++#ifdef ALLOW_NONINCREASING_TIMESTAMPS
++    // The OPlus camera HAL reports non-monotonic frame timestamps; AOSP
++    // would mark every such buffer CAMERA_BUFFER_STATUS_ERROR.
++    (void)timestampIncreasing;
++#else
++    // OPLUSCAM-END
+     if (timestampIncreasing && timestamp != 0 && timestamp <= mLastTimestamp
+             && b.status != CAMERA_BUFFER_STATUS_ERROR) {
+         ALOGE("%s: Stream %d: timestamp %" PRId64 " is not increasing. Prev timestamp %" PRId64,
+                 __FUNCTION__, mId, timestamp, mLastTimestamp);
+         b.status = CAMERA_BUFFER_STATUS_ERROR;
+     }
++    // OPLUSCAM-BEGIN
++#endif
++    // OPLUSCAM-END
+     mLastTimestamp = timestamp;
+ 
+     /**
