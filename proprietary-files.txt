@@ -79,7 +79,6 @@ odm/etc/camera/model/license.lic
 odm/etc/camera/singleblur/license_release.license
 system/app/ExtensionsService/ExtensionsService.apk
 system_ext/lib64/liboplushwui_jni.so
-system_ext/lib64/libcsextimpl.so
 odm/etc/camera/omoji/assets/sdk_assets/ai_face_processor_e51.bundle
 odm/etc/camera/omoji/assets/sdk_assets/controller_cpp.bundle
 
